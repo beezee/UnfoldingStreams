@@ -1,0 +1,52 @@
+# Build outputs
+bin/
+obj/
+Debug/
+Release/
+out/
+artifacts/
+TestResults/
+
+# User-specific files
+*.user
+*.suo
+*.userprefs
+
+# IDE settings
+.vs/
+.idea/
+*.iml
+*.sln.iml
+*.[Rr]e[Ss]harper
+_ReSharper.*/
+*.DotSettings.user
+
+# VS Code (keep common workspace configs if committed intentionally)
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/packages/
+packages/
+project.lock.json
+PackageRestoreConsent.xml
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+*.coverage
+*.coveragexml
+
+# Azure Functions local settings (if present)
+local.settings.json

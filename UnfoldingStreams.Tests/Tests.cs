@@ -225,4 +225,13 @@ public class Tests
       "(6, 7)", "(4, 5)",
       "(7, 8)", "(5, 6)"], result);
   } 
+
+  [Fact]
+  public void FilterMapTest()
+  {
+    var count = Atom(0);
+    var unfold = Unfold.foreverM(() => swapIO(count, c => c + 1));
+    var result = unfold.FilterMap(x => x % 2 == 0 ? Some($"{x}") : None).Take(5).Source().Collect().As().Run();
+    Assert.Equal(["2", "4", "6", "8", "10"], result);
+  }
 }

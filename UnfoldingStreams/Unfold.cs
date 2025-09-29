@@ -87,6 +87,14 @@ public static class UnfoldExtensions
   public static Unfold<S, M, T> Concat<S, M, T>(this Unfold<S, M, T> fst, Unfold<S, M, T> snd)
   where M : MonadIO<M>, Alternative<M> =>
     Unfold.concat(fst, snd);
+
+  public static Unfold<S, M, U> Map<S, M, T, U>(this Unfold<S, M, T> unfold, Func<T, U> f)
+  where M : MonadIO<M>, Alternative<M> =>
+    Unfold.map(unfold, f);
+
+  public static Unfold<S, M, U> FilterMap<S, M, T, U>(this Unfold<S, M, T> unfold, Func<T, Option<U>> f)
+  where M : MonadIO<M>, Alternative<M> =>
+    Unfold.filterMap(unfold, f);
 };
 
 public static partial class Unfold
@@ -341,4 +349,16 @@ public static partial class Unfold
           Some: x => M.Pure((Some(x), t.Item2))
         )));
   }
+
+  public static Unfold<S, M, U> map<S, M, T, U>(this Unfold<S, M, T> unfold, Func<T, U> f)
+  where M : MonadIO<M>, Alternative<M> =>
+    new Unfold<S, M, U>(
+      unfold.Start,
+      s => unfold.Step(s).Map(t => (t.Item1, t.Item2.Map(f))));
+
+  public static Unfold<S, M, U> filterMap<S, M, T, U>(this Unfold<S, M, T> unfold, Func<T, Option<U>> f)
+  where M : MonadIO<M>, Alternative<M> =>
+    new Unfold<S, M, U>(
+      unfold.Start,
+      s => unfold.Step(s).Map(t => (t.Item1, t.Item2.Bind(f))));
 }

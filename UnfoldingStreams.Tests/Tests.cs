@@ -207,4 +207,22 @@ public class Tests
       result
     );
   }
+
+  [Fact]
+  public void BindTest()
+  {
+    var count = Atom(0);
+    var result = (
+      from x in Unfold.foreverM(() => swapIO(count, c => c + 1)).Take(5).Source()
+      from y in Unfold.cycle<IO, (int, int)>([(x, x + 1), (x + 2, x + 3)]).Take(3).Skip(1).Source()
+      from z in Unfold.foreverM(() => IO.pure($"{y}")).Take(1).Source()
+      select z
+      ).As().Collect().Run();
+    Assert.Equal([
+      "(3, 4)", "(1, 2)",
+      "(4, 5)", "(2, 3)",
+      "(5, 6)", "(3, 4)",
+      "(6, 7)", "(4, 5)",
+      "(7, 8)", "(5, 6)"], result);
+  } 
 }

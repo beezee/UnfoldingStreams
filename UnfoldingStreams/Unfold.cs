@@ -109,6 +109,14 @@ public static partial class Unfold
         Empty: () => (None, None),
         Tail: (h, t) => (Some(t), Some(h)))));
 
+  public static Unfold<(Seq<T> Elements, int Index), M, T> cycle<M, T>(Seq<T> elements)
+  where M : MonadIO<M>, Alternative<M> =>
+    new Unfold<(Seq<T> Elements, int Index), M, T>(
+      (elements, 0),
+      state => M.Pure(
+        (Some((state.Elements, (state.Index + 1) % state.Elements.Count == 0 ? 0 : state.Index + 1)),
+         Some(state.Elements[state.Index % state.Elements.Count]))));
+
   public static Unfold<S, M, T> empty<S, M, T>(S start)
   where M : MonadIO<M>, Alternative<M>, Monad<M> =>
     new Unfold<S, M, T>(

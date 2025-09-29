@@ -2,7 +2,7 @@
 
 public record struct Unfold<S, M, T>(
   S Start,
-  Func<S, K<M, (Option<S>, Option<T>)>> Step
+  Func<S, K<M, (Option<S> State, Option<T> Emit)>> Step
 ) where M : MonadIO<M>, Alternative<M>;
 
 public static class UnfoldExtensions
@@ -54,7 +54,7 @@ public static class UnfoldExtensions
   where M : MonadIO<M>, Alternative<M>, Functor<M> =>
     Unfold.grouped(unfold, size);
 
-  public static Unfold<(S, TimeSpan, Iterable<Duration>), M, T> OnSchedule<S, M, T>(
+  public static Unfold<(S, TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, T Emit)> OnSchedule<S, M, T>(
     this Unfold<S, M, T> unfold,
     Schedule schedule,
     WithTimeout<M> timed,
@@ -62,14 +62,14 @@ public static class UnfoldExtensions
   ) where M : MonadIO<M>, Alternative<M>, Monad<M> =>
     Unfold.onSchedule(unfold, schedule, timed, onExpire);
 
-  public static Unfold<(S, TimeSpan, Iterable<Duration>), M, T> OnSchedule<S, M, T>(
+  public static Unfold<(S, TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, T Emit)> OnSchedule<S, M, T>(
     this Unfold<S, M, T> unfold,
     Schedule schedule,
     Func<S, (Option<S>, T)> onExpire
-  ) where M : MonadIO<M>, Alternative<M>, Monad<M>, MonadUnliftIO<M> =>
+  ) where M : MonadIO<M>, Alternative<M>, Monad<M> =>
     Unfold.onSchedule(unfold, schedule, onExpire);
 
-  public static Unfold<((S, Seq<T>), TimeSpan, Iterable<Duration>), M, Seq<T>> GroupedWithin<S, M, T>(
+  public static Unfold<((S, Seq<T>), TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, Seq<T> Emit)> GroupedWithin<S, M, T>(
     this Unfold<S, M, T> unfold,
     Schedule schedule,
     WithTimeout<M> timed,
@@ -77,11 +77,11 @@ public static class UnfoldExtensions
   ) where M : MonadIO<M>, Alternative<M>, Monad<M> =>
     Unfold.groupedWithin(unfold, schedule, timed, size);
 
-  public static Unfold<((S, Seq<T>), TimeSpan, Iterable<Duration>), M, Seq<T>> GroupedWithin<S, M, T>(
+  public static Unfold<((S, Seq<T>), TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, Seq<T> Emit)> GroupedWithin<S, M, T>(
     this Unfold<S, M, T> unfold,
     Schedule schedule,
     int size
-  ) where M : MonadIO<M>, Alternative<M>, Monad<M>, MonadUnliftIO<M> =>
+  ) where M : MonadIO<M>, Alternative<M>, Monad<M> =>
     Unfold.groupedWithin(unfold, schedule, size);
 
   public static Unfold<S, M, T> Concat<S, M, T>(this Unfold<S, M, T> fst, Unfold<S, M, T> snd)
@@ -224,67 +224,71 @@ public static partial class Unfold
         )
       ).As().Value));
 
-  public static Unfold<(S, TimeSpan, Iterable<Duration>), M, T> onSchedule<S, M, T>(
+  public static Unfold<(S State, TimeSpan Spent, TimeSpan Remaining, Iterable<Duration> Schedule), M, (TimeSpan Spent, T Emit)> onSchedule<S, M, T>(
     Unfold<S, M, T> unfold,
     Schedule schedule,
     WithTimeout<M> timed,
-    Func<S, (Option<S>, T)> onExpire
+    Func<S, (Option<S> State, T Emit)> onExpire
   ) where M : MonadIO<M>, Alternative<M>, Monad<M> => (
     from sched in Identity.Pure(schedule.Pop())
-    select sched.Item1.Match(
-      None: () => Unfold.empty<(S, TimeSpan, Iterable<Duration>), M, T>(
-        (unfold.Start, TimeSpan.Zero, sched.Item2)
+    select sched.Head.Match(
+      None: () => Unfold.empty<(S, TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, T Emit)>(
+        (unfold.Start, TimeSpan.Zero, TimeSpan.Zero, sched.Tail)
       ),
-      Some: ts => new Unfold<(S, TimeSpan, Iterable<Duration>), M, T>(
-        (unfold.Start, ts, sched.Item2),
+      Some: ts => new Unfold<(S State, TimeSpan Spent,TimeSpan Remaining, Iterable<Duration> Schedule), M, (TimeSpan Spent, T Emit)>(
+        (unfold.Start, TimeSpan.Zero, ts, sched.Tail),
         s => (
-          from res in timed.RunTracked(() => unfold.Step(s.Item1), s.Item2)
-           .Map(x => { Console.WriteLine($"ts: {s.Item2}, res: {x}"); return x;  })
-          let handleExpire = res.Item2
-            .Filter(x => x.Item2.IsSome || res.Item1.IsSome)
+          from res in timed.RunTracked(() => unfold.Step(s.State), s.Remaining)
+          let handleExpire = res.Result
+            .Filter(x => x.Emit.IsSome || res.Remaining.IsSome)
             .ToEither<S>(
-              // Edge case - if interval ends
-              // no timeout, no emit, and signal terminate
-              // we will flush from originating state
-              // and proceed from flush output state
-              // This means "bypass" termination
-              // Alternatives exist with their own compromises
-              res.Item2.Bind(x => x.Item1).IfNone(s.Item1)
+              res.Result.Bind(x => x.State).IfNone(s.State)
             )
-            .Match(
+            .Match<(Option<S> State, Option<T> Emit)>(
               Left: s => (
                 from onExp in Identity.Pure(onExpire(s))
                 select (
-                  onExp.Item1,
-                  Some(onExp.Item2)
+                  onExp.State,
+                  Some(onExp.Emit)
+                    .Filter(_ =>
+                      // Edge case - if interval ends,
+                      // no timeout, no emit,
+                      // and step signals terminate
+                      // we will flush from originating state
+                      // and propagate the termination
+                      // This interprets the flush state as
+                      // accounting for flush, which is
+                      // irrelevant when we have terminated
+                      !res.Result.Exists(_ => _.State.IsNone)
+                    )
                 )
               ).As().Value,
               Right: t => t
             )
-          let nextSched = res.Item1
-            .Filter(_ => handleExpire.Item2.IsNone)
-            .Match(
-              Some: ts => Some((ts, s.Item3)),
+          let nextSched = res.Remaining
+            .Filter(_ => handleExpire.Emit.IsNone)
+            .Match<Option<(TimeSpan Spent, TimeSpan Remaining, Iterable<Duration> Schedule)>>(
+              Some: ts => Some((s.Spent + res.Spent, ts, s.Schedule)),
               None: () => (
-                from nxtSched in Identity.Pure(s.Item3.Pop())
-                select nxtSched.Item1.Map(ts => (ts, nxtSched.Item2))
+                from nxtSched in Identity.Pure(s.Schedule.Pop())
+                select nxtSched.Head.Map(ts => (TimeSpan.Zero, ts, nxtSched.Tail))
               ).As().Value
             )
           select 
-            ((handleExpire.Item1, nextSched).Apply((s, ns) => (
-              s, ns.Item1, ns.Item2
-            )).As(), handleExpire.Item2)
+            ((handleExpire.State, nextSched).Apply((ns, nsch) => (
+              ns, nsch.Spent, nsch.Remaining, nsch.Schedule
+            )).As(), handleExpire.Emit.Map(x => (s.Spent + res.Spent, x)))
         )
       )
     )
   ).As().Value;
 
-  public static Unfold<(S, TimeSpan, Iterable<Duration>), M, T> onSchedule<S, M, T>(
+  public static Unfold<(S, TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, T Emit)> onSchedule<S, M, T>(
     Unfold<S, M, T> unfold,
     Schedule schedule,
     Func<S, (Option<S>, T)> onExpire
-  ) where M : MonadIO<M>, Alternative<M>, Monad<M>, MonadUnliftIO<M> =>
-    onSchedule(unfold, schedule, WithTimeout.UnliftIO<M>(), onExpire);
+  ) where M : MonadIO<M>, Alternative<M>, Monad<M> =>
+    onSchedule(unfold, schedule, WithTimeout.HonorSystem<M>(), onExpire);
 
   public static Unfold<(S, Seq<T>), M, Seq<T>> grouped<S, M, T>(Unfold<S, M, T> unfold, int size)
   where M : MonadIO<M>, Alternative<M>, Functor<M> =>
@@ -295,7 +299,7 @@ public static partial class Unfold
       []
     );
 
-  public static Unfold<((S, Seq<T>), TimeSpan, Iterable<Duration>), M, Seq<T>> groupedWithin<S, M, T>(
+  public static Unfold<((S, Seq<T>), TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, Seq<T> Emit)> groupedWithin<S, M, T>(
     Unfold<S, M, T> unfold,
     Schedule schedule,
     WithTimeout<M> timed,
@@ -306,12 +310,12 @@ public static partial class Unfold
       schedule,
       timed, s => (Some<(S, Seq<T>)>((s.Item1, [])), s.Item2));
 
-  public static Unfold<((S, Seq<T>), TimeSpan, Iterable<Duration>), M, Seq<T>> groupedWithin<S, M, T>(
+  public static Unfold<((S, Seq<T>), TimeSpan, TimeSpan, Iterable<Duration>), M, (TimeSpan Spent, Seq<T> Emit)> groupedWithin<S, M, T>(
     Unfold<S, M, T> unfold,
     Schedule schedule,
     int size
-  ) where M : MonadIO<M>, Alternative<M>, Monad<M>, MonadUnliftIO<M> =>
-    groupedWithin(unfold, schedule, WithTimeout.UnliftIO<M>(), size);
+  ) where M : MonadIO<M>, Alternative<M>, Monad<M> =>
+    groupedWithin(unfold, schedule, WithTimeout.HonorSystem<M>(), size);
 
   public static Unfold<S, M, T> concat<S, M, T>(Unfold<S, M, T> fst, Unfold<S, M, T> snd)
   where M : MonadIO<M>, Alternative<M>, Monad<M> {

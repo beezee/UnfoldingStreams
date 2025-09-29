@@ -5,12 +5,12 @@ where M : MonadIO<M>
 {
   K<M, Option<A>> Run<A>(Func<K<M, A>> ma, TimeSpan timeout);
 
-  public K<M, (Option<TimeSpan>, Option<A>)> RunTracked<A>(Func<K<M, A>> ma, TimeSpan timeout) => (
+  public K<M, (TimeSpan Spent, Option<TimeSpan> Remaining, Option<A> Result)> RunTracked<A>(Func<K<M, A>> ma, TimeSpan timeout) => (
     from stopwatch in IO.lift(() => new Stopwatch())
     from _start in IO.lift(() => stopwatch.Start())
     from res in Run(ma, timeout)
     from _stop in IO.lift(() => stopwatch.Stop())
-    select (timeout.Remaining(stopwatch.Elapsed), res));
+    select (stopwatch.Elapsed, timeout.Remaining(stopwatch.Elapsed), res));
 }
 
 public class TimedUnliftIO<M> : WithTimeout<M>
@@ -41,16 +41,13 @@ public static class WithTimeout
 
 public static class ScheduleExtensions
 {
-  public static Option<TimeSpan> Remaining(this TimeSpan ts, TimeSpan spent)
-  {
-    Console.WriteLine($"ts: {ts}, spent: {spent}, remaining: {(ts > spent ? ts - spent : TimeSpan.Zero)}");
-    return ts > spent ? Some(ts - spent) : None;
-  }
+  public static Option<TimeSpan> Remaining(this TimeSpan ts, TimeSpan spent) =>
+    ts > spent ? Some(ts - spent) : None;
 
-  public static (Option<X>, Iterable<X>) Uncons<X>(this Iterable<X> xs) =>
+  public static (Option<X> Head, Iterable<X> Tail) Uncons<X>(this Iterable<X> xs) =>
     xs.IsEmpty() ? (None, xs) : (xs.Head(), xs.Tail());
 
-  public static (Option<TimeSpan>, Iterable<Duration>) Pop(this Iterable<Duration> schedule) => (
+  public static (Option<TimeSpan> Head, Iterable<Duration> Tail) Pop(this Iterable<Duration> schedule) => (
     from durRest in Identity.Pure(schedule.Uncons())
     select (
       durRest.Item1.Map(
@@ -58,6 +55,6 @@ public static class ScheduleExtensions
       durRest.Item2)
   ).As().Value;
 
-  public static (Option<TimeSpan>, Iterable<Duration>) Pop(this Schedule schedule) =>
+  public static (Option<TimeSpan> Head, Iterable<Duration> Tail) Pop(this Schedule schedule) =>
     schedule.Run().Pop();
 }

@@ -180,27 +180,29 @@ public class Tests
       from _ in IO.yieldFor(new Duration(c + 1))
       from upd in swapIO(count, c => c + 1)
       select upd);
-    var result = unfold
+    var res = unfold
       .GroupedWithin(
         // Illustrate timeout before any emit
         Schedule.fixedInterval(new Duration(2)).Take(1) +
-        // Account for cold start overhead - first emit takes 20+ ms
-        Schedule.fixedInterval(new Duration(30)).Take(1) +
-        Schedule.fixedInterval(new Duration(20)).Take(2) +
+        Schedule.fixedInterval(new Duration(20)).Take(3) +
         Schedule.fixedInterval(new Duration(50)),
-        WithTimeout.HonorSystem<IO>(),
         5)
-      .Take(7).Source().Map(xs => (xs, xs.AsEnumerable().Sum())).Collect().As().Run();
-    Console.WriteLine(result);
+      .Take(7).Source().Collect().As().Run();
+    Console.WriteLine(res);
+    var result = res.Map(xs => xs.Emit);
+    // Timing assertion:
+    // excluding first element for cold start
+    // init of each sums to under schedule
+    // sum of each is > elapsed - 5ms, < elapsed
     Assert.Equal(
       [
-        ([1], 1),
-        ([2, 3, 4, 5, 6], 20),
-        ([7, 8, 9], 24),
-        ([10, 11], 21),
-        ([12, 13, 14, 15], 54),
-        ([16, 17, 18], 51),
-        ([19, 20, 21], 60)
+        [1],
+        [2, 3, 4, 5, 6],
+        [7, 8, 9],
+        [10, 11],
+        [12, 13, 14, 15],
+        [16, 17, 18],
+        [19, 20, 21]
       ],
       result
     );
